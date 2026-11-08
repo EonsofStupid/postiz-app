@@ -1,0 +1,24 @@
+fuqn.ai base image
+
+This container image packages Postiz so fuqn.ai can run an isolated instance
+per customer. It is a build of the public fork:
+
+  https://github.com/EonsofStupid/postiz-app
+
+Postiz is free software under the GNU Affero General Public License, version 3.
+Copyright remains with the original Postiz authors and contributors. The
+license text is at /app/LICENSE. This image does not grant a proprietary,
+paid, or white-label license, and it does not remove upstream copyright or
+license notices.
+
+AGPL section 13 requires that users who interact with a modified copy over a
+network can receive the corresponding source of that version. The
+corresponding source of this image is the public commit recorded in the OCI
+label org.opencontainers.image.revision. The upstream project is:
+
+  https://github.com/gitroomhq/postiz-app
+
+The process supervisor installed in this image (pm2) is also AGPL-3.0
+software. Its license notices are kept in node_modules inside the image.
+
+Do not strip /app/LICENSE or this notice when you republish the image.
