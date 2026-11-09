@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Push the fuqn.ai base image to this fork's registry.
+# Push a multi-arch fuqn.ai image and sign it with keyless cosign.
 # Refuses every other repository and every other image name.
 # Does nothing unless the workflow sets FUQN_PUBLISH=1.
 
@@ -25,11 +25,16 @@ case "$image" in
     ;;
 esac
 
+if ! command -v cosign >/dev/null 2>&1; then
+  echo "cosign is required to publish"
+  exit 1
+fi
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 
 version="$(tr -d '[:space:]' < deploy/fuqn/VERSION)"
-upstream="$(tr -d '[:space:]' < version.txt)"
+version_file="$(tr -d '[:space:]' < version.txt)"
 sha="$(git rev-parse HEAD)"
 short="$(git rev-parse --short=12 HEAD)"
 
@@ -37,10 +42,6 @@ tags=(
   --tag "${image}:${version}"
   --tag "${image}:sha-${short}"
 )
-
-if [ "${GITHUB_REF:-}" = "refs/tags/fuqn-v${version}" ]; then
-  tags+=(--tag "${image}:${version}")
-fi
 
 ref_name="${GITHUB_REF_NAME:-}"
 if [[ "$ref_name" == fuqn-v* ]]; then
@@ -67,17 +68,27 @@ for tag in "${tags[@]}"; do
       exit 1
       ;;
   esac
+  if [[ "$tag" == *gitroomhq* ]]; then
+    echo "refusing tag ${tag}"
+    exit 1
+  fi
 done
 
 docker buildx build \
-  --platform linux/amd64 \
+  --platform linux/amd64,linux/arm64 \
   --file Dockerfile \
   --build-arg "FUQN_VERSION=${version}" \
-  --build-arg "UPSTREAM_VERSION=${upstream}" \
+  --build-arg "UPSTREAM_RELEASE=v2.25.3" \
+  --build-arg "UPSTREAM_VERSION_FILE=${version_file}" \
   --build-arg "GIT_SHA=${sha}" \
   --build-arg "NEXT_PUBLIC_VERSION=fuqn-base-${version}" \
-  --provenance=true \
+  --provenance=mode=max \
   --sbom=true \
   --push \
   "${tags[@]}" \
   .
+
+# Keyless signing uses the GitHub OIDC token. It records the signature in the
+# public Rekor log only after the image push above, and only when this script
+# is invoked with FUQN_PUBLISH=1.
+cosign sign --yes "${image}:${version}"

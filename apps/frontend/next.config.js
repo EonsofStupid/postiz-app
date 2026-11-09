@@ -34,24 +34,16 @@ const nextConfig = {
 
     return config;
   },
-  async redirects() {
-    return [
-      {
-        source: '/api/uploads/:path*',
-        destination:
-          process.env.STORAGE_PROVIDER === 'local' ? '/uploads/:path*' : '/404',
-        permanent: true,
-      },
-    ];
-  },
+  // Storage mode is chosen at runtime (local disk or Cloudflare R2). A
+  // build-time redirect would freeze that choice into the image. /uploads is
+  // rewritten to the route below, which serves local files or returns 404
+  // when storage is not local. nginx in the fuqn image serves /uploads from
+  // the volume before this rewrite runs.
   async rewrites() {
     return [
       {
         source: '/uploads/:path*',
-        destination:
-          process.env.STORAGE_PROVIDER === 'local'
-            ? '/api/uploads/:path*'
-            : '/404',
+        destination: '/api/uploads/:path*',
       },
     ];
   },

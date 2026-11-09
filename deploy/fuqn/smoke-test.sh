@@ -35,10 +35,12 @@ build_command=(
   --platform linux/amd64
   --file Dockerfile
   --build-arg "FUQN_VERSION=${version}"
-  --build-arg "UPSTREAM_VERSION=${upstream}"
+  --build-arg "UPSTREAM_RELEASE=v2.25.3"
+  --build-arg "UPSTREAM_VERSION_FILE=${upstream}"
   --build-arg "GIT_SHA=${sha}"
   --build-arg "NEXT_PUBLIC_VERSION=fuqn-base-${version}"
   --tag "${image}"
+  --tag "${repository}:${version}-amd64"
   --tag "${repository}:sha-${short}"
   --iidfile "${report}/image-id"
   .
@@ -80,6 +82,7 @@ expected = {
     "org.opencontainers.image.version": version,
     "org.opencontainers.image.revision": sha,
     "org.fuqn.public-backend-placeholder": "http://fuqn-runtime-backend.invalid/api",
+    "org.fuqn.upstream.latest-release": "v2.25.3",
 }
 for key, value in expected.items():
     if labels.get(key) != value:
@@ -99,7 +102,22 @@ docker run --rm --entrypoint sh "$image" -c 'test ! -e /app/.env'
 docker run --rm --entrypoint head "$image" -n 2 /app/LICENSE > "${report}/license-head.txt"
 grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" "${report}/license-head.txt"
 docker run --rm --entrypoint grep "$image" -q "EonsofStupid/postiz-app" /app/NOTICE
-docker run --rm --entrypoint grep "$image" -R -l "fuqn-runtime-backend.invalid" /app/apps/frontend/.next >/dev/null
+docker run --rm --entrypoint grep "$image" -R -l "fuqn-runtime-backend.invalid" /app/apps/frontend/.next-source >/dev/null
+docker run --rm --entrypoint sh "$image" -c 'if command -v pm2 >/dev/null 2>&1; then exit 1; fi'
+if ! command -v trivy >/dev/null 2>&1; then
+  echo "trivy is required"
+  exit 1
+fi
+trivy image --severity HIGH,CRITICAL --exit-code 1 --ignorefile deploy/fuqn/.trivyignore --format json --output "${report}/trivy.json" "$image"
+python3 - "${report}/trivy.json" << 'PY'
+import json, sys
+report = json.load(open(sys.argv[1]))
+counts = {}
+for result in report.get("Results") or []:
+    for vuln in result.get("Vulnerabilities") or []:
+        counts[vuln.get("Severity", "?")] = counts.get(vuln.get("Severity", "?"), 0) + 1
+print("trivy high/critical", counts or "none")
+PY
 
 if docker history --no-trunc "$image" | grep -E 'JWT_SECRET=.+|DATABASE_URL=postgres|REDIS_URL=redis'; then
   echo "image history contains a runtime secret assignment"
@@ -233,6 +251,14 @@ esac
 wait_for "orchestrator" 48 \
   "${compose[@]}" exec -T app node --input-type=module -e "const r=await fetch('http://127.0.0.1:3002/health/status'); if(!r.ok) process.exit(1); const body=await r.text(); if(!body.includes('ok')) process.exit(1);"
 
+bash deploy/fuqn/functional-check.sh register "http://127.0.0.1:${port}" "$report" | tee "${report}/functional-register.txt"
+"${compose[@]}" restart app >/dev/null
+wait_for "readyz after restart" 36 ready
+bash deploy/fuqn/functional-check.sh login "http://127.0.0.1:${port}" "$report" | tee "${report}/functional-restart.txt"
+"${compose[@]}" up -d --force-recreate --no-deps app >/dev/null
+wait_for "readyz after recreate" 48 ready
+bash deploy/fuqn/functional-check.sh login "http://127.0.0.1:${port}" "$report" | tee "${report}/functional-recreate.txt"
+
 {
   echo "image=${image}"
   echo "image_id=${image_id}"
@@ -245,6 +271,8 @@ wait_for "orchestrator" 48 \
   echo "frontend_status=${frontend_code}"
   echo "organization_table=present"
   echo "orchestrator=ok"
+  echo "functional=ok"
+  echo "restart_persistence=ok"
   echo "app_port=${app_port}"
   echo "registry_digest=not_pushed"
 } | tee "${report}/summary.txt"

@@ -1,13 +1,32 @@
 import { access, open, readdir, readFile, writeFile, constants } from 'node:fs/promises';
 import { join } from 'node:path';
 
-const placeholder = 'http://fuqn-runtime-backend.invalid/api';
+const backendPlaceholder = 'http://fuqn-runtime-backend.invalid/api';
+const optionalPublic = [
+  'NEXT_PUBLIC_POLOTNO',
+  'NEXT_PUBLIC_DISCORD_SUPPORT',
+  'NEXT_PUBLIC_POSTIZ_OAUTH_LOGO_URL',
+  'NEXT_PUBLIC_POSTIZ_OAUTH_DISPLAY_NAME',
+  'NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY',
+  'NEXT_PUBLIC_FACEBOOK_PIXEL',
+  'NEXT_PUBLIC_SENTRY_DSN',
+  'NEXT_PUBLIC_GTM_ID',
+  'NEXT_PUBLIC_TRACKING_TRIAL',
+];
 const banned = [
   'replace-with-a-long-random-secret',
   'postiz-password',
   'postiz-local-pwd',
   'changeme',
   'random string',
+];
+const cloudflareKeys = [
+  'CLOUDFLARE_ACCOUNT_ID',
+  'CLOUDFLARE_ACCESS_KEY',
+  'CLOUDFLARE_SECRET_ACCESS_KEY',
+  'CLOUDFLARE_BUCKETNAME',
+  'CLOUDFLARE_BUCKET_URL',
+  'CLOUDFLARE_REGION',
 ];
 
 function fail(message) {
@@ -47,6 +66,17 @@ function requireHttpUrl(name, value) {
   return url;
 }
 
+function safeReplacement(name, value) {
+  if (
+    value.includes('\0') ||
+    value.includes('\n') ||
+    value.includes('\r') ||
+    value.includes('fuqnrt_')
+  ) {
+    fail(`${name} cannot be written into the frontend bundle`);
+  }
+}
+
 function replaceBuffer(buf, from, to) {
   const parts = [];
   let start = 0;
@@ -67,25 +97,32 @@ function replaceBuffer(buf, from, to) {
   return { buf: Buffer.concat(parts), count };
 }
 
-async function walk(dir, from, to) {
+async function walk(dir, replacements) {
   let count = 0;
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
-      count += await walk(path, from, to);
+      count += await walk(path, replacements);
       continue;
     }
     if (!entry.isFile()) {
       continue;
     }
-    const data = await readFile(path);
-    if (!data.includes(from)) {
-      continue;
+    let data = await readFile(path);
+    let fileCount = 0;
+    for (const [from, to] of replacements) {
+      if (!data.includes(from)) {
+        continue;
+      }
+      const replaced = replaceBuffer(data, from, to);
+      data = replaced.buf;
+      fileCount += replaced.count;
     }
-    const replaced = replaceBuffer(data, from, to);
-    await writeFile(path, replaced.buf);
-    count += replaced.count;
+    if (fileCount > 0) {
+      await writeFile(path, data);
+      count += fileCount;
+    }
   }
   return count;
 }
@@ -142,6 +179,7 @@ if (backend.pathname !== '/api') {
 if (backend.hostname === 'fuqn-runtime-backend.invalid') {
   fail('NEXT_PUBLIC_BACKEND_URL is still the image build placeholder');
 }
+safeReplacement('NEXT_PUBLIC_BACKEND_URL', process.env.NEXT_PUBLIC_BACKEND_URL);
 
 const internal = process.env.BACKEND_INTERNAL_URL;
 if (internal !== 'http://127.0.0.1:3000' && internal !== 'http://localhost:3000') {
@@ -156,10 +194,15 @@ if (process.env.IS_GENERAL !== 'true') {
   fail('IS_GENERAL=true is required by the current Postiz configuration');
 }
 
-if ((process.env.STORAGE_PROVIDER || 'local') !== 'local') {
-  fail(
-    'This base image was built for STORAGE_PROVIDER=local. Upload redirects are fixed at image build time.'
-  );
+const storage = process.env.STORAGE_PROVIDER || 'local';
+if (storage !== 'local' && storage !== 'cloudflare') {
+  fail('STORAGE_PROVIDER must be local or cloudflare');
+}
+if (storage === 'cloudflare') {
+  for (const key of cloudflareKeys) {
+    rejectPlaceholder(key, process.env[key]);
+  }
+  requireHttpUrl('CLOUDFLARE_BUCKET_URL', process.env.CLOUDFLARE_BUCKET_URL);
 }
 
 const notSecured = (process.env.NOT_SECURED || '').toLowerCase();
@@ -167,47 +210,25 @@ if (notSecured === '1' || notSecured === 'true' || notSecured === 'yes') {
   fail('NOT_SECURED is refused by the fuqn base image');
 }
 
-if (process.env.FUQN_PUBLIC_BACKEND_PLACEHOLDER !== placeholder) {
-  fail('FUQN_PUBLIC_BACKEND_PLACEHOLDER does not match this image');
-}
-
-const replacement = process.env.NEXT_PUBLIC_BACKEND_URL;
-if (
-  replacement.includes(placeholder) ||
-  replacement.includes('\0') ||
-  replacement.includes('\n') ||
-  replacement.includes('\r')
-) {
-  fail('NEXT_PUBLIC_BACKEND_URL cannot be written into the frontend bundle');
+const pairs = [
+  [Buffer.from(backendPlaceholder), Buffer.from(process.env.NEXT_PUBLIC_BACKEND_URL)],
+];
+for (const name of optionalPublic) {
+  const value = process.env[name] || '';
+  safeReplacement(name, value);
+  pairs.push([Buffer.from(`fuqnrt_${name}`), Buffer.from(value)]);
 }
 
 const nextDir = '/app/apps/frontend/.next';
 let replacements = 0;
 try {
   await access(nextDir, constants.R_OK);
-  replacements = await walk(
-    nextDir,
-    Buffer.from(placeholder),
-    Buffer.from(replacement)
-  );
+  replacements = await walk(nextDir, pairs);
 } catch (error) {
   fail(`could not update the frontend bundle (${error.code || error.message})`);
 }
 if (replacements < 1) {
-  let alreadyApplied = false;
-  try {
-    alreadyApplied = await walk(
-      nextDir,
-      Buffer.from(replacement),
-      Buffer.from(replacement)
-    );
-  } catch (error) {
-    fail(`could not read the frontend bundle (${error.code || error.message})`);
-  }
-  if (!alreadyApplied) {
-    fail('frontend bundle does not contain the public URL placeholder');
-  }
-  replacements = alreadyApplied;
+  fail('frontend bundle does not contain the public runtime placeholders');
 }
 
 try {
@@ -218,5 +239,5 @@ try {
 }
 
 console.log(
-  `fuqn runtime config applied for ${frontend.origin} (${replacements} frontend placeholder replacements)`
+  `fuqn runtime config applied for ${frontend.origin} storage=${storage} (${replacements} frontend placeholder replacements)`
 );

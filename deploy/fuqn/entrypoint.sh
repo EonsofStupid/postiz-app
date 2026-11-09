@@ -1,7 +1,8 @@
 #!/bin/bash
 # Apply runtime configuration, sync the Prisma schema, then start Postiz.
 # Secrets come from the container environment. Nothing here is baked into
-# the image layers.
+# the image layers. The frontend bundle is copied from the pristine
+# .next-source tree on every start so a restart picks up new public values.
 
 set -euo pipefail
 
@@ -11,13 +12,15 @@ mkdir -p \
   /tmp/nginx/proxy \
   /tmp/nginx/fastcgi \
   /tmp/nginx/uwsgi \
-  /tmp/nginx/scgi \
-  /www/.pm2
+  /tmp/nginx/scgi
+
+rm -rf /app/apps/frontend/.next
+cp -a /app/apps/frontend/.next-source /app/apps/frontend/.next
 
 node /app/deploy/fuqn/prepare-runtime.mjs
 
 attempts=0
-until pnpm exec prisma db push \
+until node /app/node_modules/prisma/build/index.js db push \
   --schema ./libraries/nestjs-libraries/src/database/prisma/schema.prisma \
   --skip-generate
 do
@@ -31,6 +34,4 @@ do
 done
 
 nginx -t -c /etc/nginx/nginx.conf
-nginx -c /etc/nginx/nginx.conf
-
-exec pm2-runtime start /app/deploy/fuqn/ecosystem.config.cjs
+exec node /app/deploy/fuqn/supervise.mjs

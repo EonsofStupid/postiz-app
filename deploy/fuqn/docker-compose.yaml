@@ -7,15 +7,16 @@ name: fuqn
 
 services:
   app:
-    image: ghcr.io/eonsofstupid/postiz-app:${FUQN_VERSION:-0.1.0}
+    image: ghcr.io/eonsofstupid/postiz-app:${FUQN_VERSION:-0.2.0}
     build:
       context: ../..
       dockerfile: Dockerfile
       args:
-        FUQN_VERSION: ${FUQN_VERSION:-0.1.0}
-        UPSTREAM_VERSION: ${FUQN_UPSTREAM_VERSION:-unknown}
+        FUQN_VERSION: ${FUQN_VERSION:-0.2.0}
+        UPSTREAM_RELEASE: v2.25.3
+        UPSTREAM_VERSION_FILE: ${FUQN_UPSTREAM_VERSION_FILE:-v1.47.0}
         GIT_SHA: ${FUQN_GIT_SHA:-unknown}
-        NEXT_PUBLIC_VERSION: fuqn-base-${FUQN_VERSION:-0.1.0}
+        NEXT_PUBLIC_VERSION: fuqn-base-${FUQN_VERSION:-0.2.0}
     pull_policy: missing
     restart: unless-stopped
     env_file:
@@ -26,7 +27,7 @@ services:
       REDIS_URL: redis://:${FUQN_REDIS_PASSWORD}@redis:6379
       BACKEND_INTERNAL_URL: http://127.0.0.1:3000
       TEMPORAL_ADDRESS: temporal:7233
-      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
       IS_GENERAL: "true"
     ports:
       - "127.0.0.1:${FUQN_BIND_PORT:-4007}:5000"

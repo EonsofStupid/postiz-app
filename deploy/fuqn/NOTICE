@@ -18,7 +18,14 @@ label org.opencontainers.image.revision. The upstream project is:
 
   https://github.com/gitroomhq/postiz-app
 
-The process supervisor installed in this image (pm2) is also AGPL-3.0
-software. Its license notices are kept in node_modules inside the image.
+The latest published upstream release when this image line was cut is v2.25.3.
+version.txt in that tag and in this tree still says v1.47.0. That file is not
+the release identifier. This fork's commit, recorded in
+org.opencontainers.image.revision, is the corresponding source. It is ahead
+of v2.25.3. The image is built from that source. It does not extend the
+official ghcr.io/gitroomhq image.
+
+The process supervisor is deploy/fuqn/supervise.mjs in this source tree.
+pm2 is not installed.
 
 Do not strip /app/LICENSE or this notice when you republish the image.

@@ -1,0 +1,41 @@
+# Accepted findings. The smoke test and CI fail on every other high or critical.
+#
+# Debian 12 packages below have no fixed version in the Trivy database after
+# apt-get upgrade. The image does not run systemd-homed, and it does not use
+# nginx's alias directive (uploads use root).
+
+CVE-2023-45853
+CVE-2025-69720
+CVE-2026-15176
+CVE-2026-16742
+CVE-2026-41992
+CVE-2026-53613
+CVE-2026-53615
+CVE-2026-54369
+CVE-2026-76844
+CVE-2026-78410
+CVE-2026-85091
+CVE-2026-93479
+CVE-2026-9538
+CVE-2026-97205
+
+# Rust crates compiled into @temporalio/core-bridge. They are not npm packages
+# we can override. Moving them means a Temporal SDK release this fork does not
+# contain yet.
+
+CVE-2026-115905
+CVE-2026-115909
+CVE-2026-31812
+GHSA-4w2j-j2ch-gfr8
+GHSA-4w2j-m93h-cj5j
+GHSA-82j2-j2ch-gfr8
+
+# graphql-scalars 1.25.0 is required by type-graphql 2.0.0-rc.1. The fixed
+# release is 2.x and is not a drop-in for that peer.
+
+CVE-2026-115887
+
+# node-forge signature-forgery advisory with no fixed version in this scan.
+# The other node-forge highs are overridden to 1.4.1.
+
+CVE-2026-85393

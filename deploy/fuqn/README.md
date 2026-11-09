@@ -39,11 +39,13 @@ None of those services publish a host port. The application publishes container 
 
 Secrets and customer URLs are not build arguments. Compose injects them when the container starts. The entrypoint rejects known placeholders, a JWT shorter than 32 characters, a database URL without a password, Redis without a password, and `NOT_SECURED`.
 
-Next.js inlines `NEXT_PUBLIC_BACKEND_URL` at build time. The image is built with the placeholder `http://fuqn-runtime-backend.invalid/api`. On startup the entrypoint replaces that placeholder in the frontend build with the runtime value. `FRONTEND_URL`, `MAIN_URL`, and `NEXT_PUBLIC_BACKEND_URL` must share one origin, and the backend path must be `/api`, because nginx serves the UI and the API on the same host.
+Next.js inlines `NEXT_PUBLIC_*` values at build time. The image is built with placeholders. On every start the entrypoint copies a pristine frontend build and replaces those placeholders from the container environment. `NEXT_PUBLIC_BACKEND_URL` is required. The optional browser values are `NEXT_PUBLIC_POLOTNO`, `NEXT_PUBLIC_DISCORD_SUPPORT`, `NEXT_PUBLIC_POSTIZ_OAUTH_LOGO_URL`, `NEXT_PUBLIC_POSTIZ_OAUTH_DISPLAY_NAME`, `NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY`, `NEXT_PUBLIC_FACEBOOK_PIXEL`, `NEXT_PUBLIC_SENTRY_DSN`, `NEXT_PUBLIC_GTM_ID`, and `NEXT_PUBLIC_TRACKING_TRIAL`. Unset optional values become empty. `NEXT_PUBLIC_VERSION` stays the image version. `FRONTEND_URL`, `MAIN_URL`, and `NEXT_PUBLIC_BACKEND_URL` must share one origin, and the backend path must be `/api`.
 
-`STORAGE_PROVIDER=local` is fixed into the Next.js upload redirects at build time. This image refuses any other storage provider. Cloudflare R2 needs a later image build.
+`STORAGE_PROVIDER` is `local` or `cloudflare` (Cloudflare R2, the S3-compatible store Postiz implements). It is read at runtime. Local files are served from `/uploads`. R2 needs `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ACCESS_KEY`, `CLOUDFLARE_SECRET_ACCESS_KEY`, `CLOUDFLARE_BUCKETNAME`, `CLOUDFLARE_BUCKET_URL`, and `CLOUDFLARE_REGION`. Postiz has no separate generic S3 provider.
 
 `IS_GENERAL=true` is set because the current Postiz configuration marks it required.
+
+Required settings: `JWT_SECRET` (at least 32 characters), `DATABASE_URL`, `REDIS_URL` (with a password), `FRONTEND_URL`, `MAIN_URL`, `NEXT_PUBLIC_BACKEND_URL`, `BACKEND_INTERNAL_URL` (`http://127.0.0.1:3000` inside this container), `TEMPORAL_ADDRESS`, `IS_GENERAL`, and `STORAGE_PROVIDER`. Compose fills the internal URLs from `deploy/fuqn/.env.example`.
 
 Copy the template and replace every placeholder with `openssl rand -hex 32`:
 
@@ -62,16 +64,20 @@ From the repository root:
 ```bash
 docker build --platform linux/amd64 -f Dockerfile \
   --build-arg FUQN_VERSION="$(tr -d '[:space:]' < deploy/fuqn/VERSION)" \
-  --build-arg UPSTREAM_VERSION="$(tr -d '[:space:]' < version.txt)" \
+  --build-arg UPSTREAM_RELEASE=v2.25.3 \
+  --build-arg UPSTREAM_VERSION_FILE="$(tr -d '[:space:]' < version.txt)" \
   --build-arg GIT_SHA="$(git rev-parse HEAD)" \
   --build-arg NEXT_PUBLIC_VERSION="fuqn-base-$(tr -d '[:space:]' < deploy/fuqn/VERSION)" \
-  -t ghcr.io/eonsofstupid/postiz-app:0.1.0 \
+  -t ghcr.io/eonsofstupid/postiz-app:0.2.0 \
+  -t ghcr.io/eonsofstupid/postiz-app:0.2.0-amd64 \
   .
 ```
 
-Application dependencies install with `pnpm install --frozen-lockfile` and pnpm `10.6.1`, matching `packageManager`. Prisma Client is generated with the locked `prisma@6.5.0` rather than `pnpm dlx`. The Node base image is `node:22.23.4-bookworm-slim` pinned by digest. pm2 `6.0.14` is installed from `deploy/fuqn/pm2/package-lock.json` with `npm ci`.
+Repeat with `--platform linux/arm64` and the tag `ghcr.io/eonsofstupid/postiz-app:0.2.0-arm64`. `deploy/fuqn/manifest-local.sh` assembles those two tags into a local index. It does not push to GHCR.
 
-`deploy/fuqn/VERSION` is this image line (`0.1.0`). `version.txt` stays the upstream Postiz version and is copied into the label `org.fuqn.upstream.version`.
+Application dependencies install with `pnpm install --frozen-lockfile` and pnpm `10.6.1`. Prisma Client is generated with the locked `prisma@6.5.0`. The Node base is `node:22.23.4-bookworm-slim`, the current Node 22 LTS, pinned by digest. Production dependencies are pruned after the build. The process supervisor is `deploy/fuqn/supervise.mjs`. pm2 is not installed.
+
+The image is built from this fork, not from `ghcr.io/gitroomhq/postiz-app`. Upstream's Dockerfile.dev runs an unfrozen `pnpm install` and pm2 as root, and the published release `v2.25.3` (2026-10-24) is behind this fork. `version.txt` still says `v1.47.0` on that release and here. The release identifier is the git tag. The OCI label `org.fuqn.upstream.latest-release` is `v2.25.3`. The image revision is this fork's commit, which includes that release plus the later commits already on the fork. Unreleased upstream commits after the fork sync are not merged into this change.
 
 ## Smoke test
 
@@ -79,30 +85,27 @@ Application dependencies install with `pnpm install --frozen-lockfile` and pnpm 
 bash deploy/fuqn/smoke-test.sh
 ```
 
-The script builds the image, checks that the license, source notice, public-URL placeholder, and non-root user are present, checks that runtime secrets are not in the image environment, then starts the compose stack with generated passwords. It requires `/healthz`, `/readyz`, a frontend response, `/api/auth/can-register`, the `Organization` table, and orchestrator `/health/status`. It also checks that Postgres, Redis, and Temporal are not published on the host. It deletes the stack and its volumes at the end. It does not push the image.
+The script builds the amd64 image, checks the license, source notice, placeholder, non-root user, and absence of pm2, then runs Trivy at high and critical. It boots the stack, checks health, registers a user and organization, logs in, and submits a draft post. A draft with no connected channel must return a client error and is the evidence that scheduling was exercised without a live provider. It then restarts the app container and recreates it, and logs in again, to show the database volume survives. It does not push the image.
 
 ## Registry and CI
 
 The image name is `ghcr.io/eonsofstupid/postiz-app`.
 
-`.github/workflows/fuqn-image.yml` builds and smoke-tests on pull requests, on pushes to `main`, and on `fuqn-v*` tags. That job does not log in to a registry.
+`.github/workflows/fuqn-image.yml` builds `linux/amd64` and `linux/arm64` on pull requests, pushes to `main`, and `fuqn-v*` tags. The amd64 job also smoke-tests. Neither job logs in to a registry. Each uploads a CycloneDX SBOM.
 
 Publishing happens only when one of these is true, and only from `EonsofStupid/postiz-app`:
 
 1. The workflow is dispatched with the input `publish` set to `publish`.
 2. A git tag named `fuqn-v<major>.<minor>.<patch>` is pushed.
 
-Published tags are the version in `deploy/fuqn/VERSION` and `sha-<12>`. A `fuqn-v*` tag also publishes that version. The `latest` tag moves only when the dispatch input `tag_latest` is `latest`. `deploy/fuqn/publish-image.sh` refuses any other repository or image name. The published platform is `linux/amd64`, which is the platform the smoke test runs.
+The publish job builds both architectures in one Buildx invocation, attaches provenance and an SBOM, pushes the manifest list, and runs `cosign sign --yes` with GitHub OIDC. That signing step does not run unless publish is explicitly requested. `deploy/fuqn/publish-image.sh` refuses any other repository or image name. The `latest` tag moves only when the dispatch input `tag_latest` is `latest`.
 
 The inherited upstream workflow `.github/workflows/build-containers.yml` no longer runs on tag pushes. Its jobs run only in `gitroomhq/postiz-app`, and the push scripts exit if they are ever invoked elsewhere. The extension publish workflows are limited to that upstream repository as well. `deploy-aws.yml` already had that guard. The root `docker-compose.yaml` is unchanged and still references the upstream image `ghcr.io/gitroomhq/postiz-app:latest`; use this directory for fuqn.ai.
 
 ## Known limits
 
-- The linux/amd64 image is about 1.4 GB. It keeps the built monorepo and its installed dependencies. Dev tooling is not fully pruned, so a later pass can slim the runtime.
-- Only `linux/amd64` is built and published. arm64 is not part of this image yet.
-- Customer-specific `NEXT_PUBLIC_*` values other than the API URL and the image version are empty in the client bundle. Server-side settings such as `FRONTEND_URL` are read at runtime.
-- Local disk storage is the only storage mode this image will boot.
-- pm2 `6.0.14` is locked, including its AGPL agent dependency. The image does not link a PM2 Plus account. `npm audit` reports high advisories in that agent/proxy tree (`basic-ftp` and its dependents). They are not configured.
 - Schema setup uses `prisma db push`, which is what the upstream container already runs on start. It does not pass `--accept-data-loss`.
 - Prisma may print the database URL during that sync. Treat container logs as secret.
-- A local image has an image ID. It has no registry digest until a publish job pushes it. This pass does not push.
+- A local image has an image ID. It has no GHCR digest until a publish job pushes it. This pass does not push.
+- Upstream main after this fork sync is not included. Those commits are not a release.
+- Accepted Trivy findings, if any remain after the build, are listed in `deploy/fuqn/.trivyignore` with a reason.

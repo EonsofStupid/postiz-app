@@ -1,8 +1,0 @@
-{
-  "name": "fuqn-pm2",
-  "private": true,
-  "description": "Pinned process manager for the fuqn.ai base image. This package is installed only inside that image.",
-  "dependencies": {
-    "pm2": "6.0.14"
-  }
-}
