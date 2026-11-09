@@ -81,7 +81,12 @@ jobs:
             --tag "ghcr.io/eonsofstupid/postiz-app:sha-${short}-${{ matrix.arch }}" \
             .
           arch="$(docker run --rm --entrypoint node "${image}" -p process.arch)"
-          test "${arch}" = "${{ matrix.arch }}"
+          # Node reports amd64 as x64.
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            test "${arch}" = "x64"
+          else
+            test "${arch}" = "arm64"
+          fi
           trivy image --severity HIGH,CRITICAL --exit-code 1 \
             --ignorefile deploy/fuqn/.trivyignore \
             --format cyclonedx --output "/tmp/fuqn-sbom-${{ matrix.arch }}.cdx.json" \
