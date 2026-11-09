@@ -5,6 +5,7 @@ on:
 
 jobs:
   submit:
+    if: github.repository == 'gitroomhq/postiz-app'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

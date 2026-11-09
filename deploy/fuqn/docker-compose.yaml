@@ -1,0 +1,137 @@
+# Isolated fuqn.ai stack for one Postiz instance.
+# Build the image first (see deploy/fuqn/README.md). This file does not
+# push to a registry. Databases, Redis, and Temporal are not published
+# on the host. The application port binds to loopback only.
+
+name: fuqn
+
+services:
+  app:
+    image: ghcr.io/eonsofstupid/postiz-app:${FUQN_VERSION:-0.2.0}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        FUQN_VERSION: ${FUQN_VERSION:-0.2.0}
+        UPSTREAM_RELEASE: v2.25.3
+        UPSTREAM_VERSION_FILE: ${FUQN_UPSTREAM_VERSION_FILE:-v1.47.0}
+        GIT_SHA: ${FUQN_GIT_SHA:-unknown}
+        NEXT_PUBLIC_VERSION: fuqn-base-${FUQN_VERSION:-0.2.0}
+    pull_policy: missing
+    restart: unless-stopped
+    env_file:
+      - path: ${FUQN_ENV_FILE:-.env}
+        required: true
+    environment:
+      DATABASE_URL: postgresql://${FUQN_POSTGRES_USER}:${FUQN_POSTGRES_PASSWORD}@postgres:5432/${FUQN_POSTGRES_DB}
+      REDIS_URL: redis://:${FUQN_REDIS_PASSWORD}@redis:6379
+      BACKEND_INTERNAL_URL: http://127.0.0.1:3000
+      TEMPORAL_ADDRESS: temporal:7233
+      UPLOAD_DIRECTORY: /uploads
+      IS_GENERAL: "true"
+    ports:
+      - "127.0.0.1:${FUQN_BIND_PORT:-4007}:5000"
+    volumes:
+      - uploads:/uploads
+      - config:/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    networks:
+      - fuqn
+
+  postgres:
+    image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${FUQN_POSTGRES_USER:?set FUQN_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${FUQN_POSTGRES_PASSWORD:?set FUQN_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${FUQN_POSTGRES_DB:?set FUQN_POSTGRES_DB}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - fuqn
+
+  redis:
+    image: redis:7.2-alpine@sha256:3d2b46efa3280299fe6e117a33fccdfeb495c39098f95d076fadd12a88005b0a
+    restart: unless-stopped
+    environment:
+      FUQN_REDIS_PASSWORD: ${FUQN_REDIS_PASSWORD:?set FUQN_REDIS_PASSWORD}
+    command:
+      - redis-server
+      - --requirepass
+      - ${FUQN_REDIS_PASSWORD:?set FUQN_REDIS_PASSWORD}
+      - --appendonly
+      - "yes"
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$FUQN_REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - fuqn
+
+  temporal-postgres:
+    image: postgres:16-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${FUQN_TEMPORAL_POSTGRES_USER:?set FUQN_TEMPORAL_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${FUQN_TEMPORAL_POSTGRES_PASSWORD:?set FUQN_TEMPORAL_POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - temporal-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - fuqn
+
+  temporal:
+    image: temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a
+    restart: unless-stopped
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: ${FUQN_TEMPORAL_POSTGRES_USER:?set FUQN_TEMPORAL_POSTGRES_USER}
+      POSTGRES_PWD: ${FUQN_TEMPORAL_POSTGRES_PASSWORD:?set FUQN_TEMPORAL_POSTGRES_PASSWORD}
+      POSTGRES_SEEDS: temporal-postgres
+      TEMPORAL_NAMESPACE: default
+      # Sample Custom*Field attributes are Text fields. Temporal's default
+      # limit is 3 Text attributes, and Postiz registers organizationId and
+      # postId. Skip the samples so those two fit.
+      SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES: "true"
+    # auto-setup binds the frontend to the container address, not loopback.
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    networks:
+      - fuqn
+
+networks:
+  fuqn:
+
+volumes:
+  uploads:
+  config:
+  postgres:
+  redis:
+  temporal-postgres:

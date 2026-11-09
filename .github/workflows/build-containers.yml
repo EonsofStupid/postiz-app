@@ -1,14 +1,18 @@
 ---
 name: "Build Containers"
 
+# This workflow is the upstream Postiz release publisher. It pushes to
+# ghcr.io/gitroomhq/postiz-app. This fork must not run it: tag pushes are
+# not a trigger here, and every job refuses to run unless the repository is
+# gitroomhq/postiz-app. fuqn.ai image validation and publishing live in
+# fuqn-image.yml and can only push ghcr.io/eonsofstupid/postiz-app.
+
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - '*'
 
 jobs:
   build-containers-common:
+    if: github.repository == 'gitroomhq/postiz-app'
     runs-on: ubuntu-latest
     outputs:
       containerver: ${{ steps.getcontainerver.outputs.containerver }}
@@ -19,6 +23,7 @@ jobs:
           echo "containerver=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
 
   build-containers:
+    if: github.repository == 'gitroomhq/postiz-app'
     needs: build-containers-common
     strategy:
       matrix:
@@ -49,6 +54,11 @@ jobs:
           CONTAINERVER: ${{ needs.build-containers-common.outputs.containerver }}
           NEXT_PUBLIC_VERSION: ${{ github.ref_name }}
         run: |
+          if [ "${GITHUB_REPOSITORY}" != "gitroomhq/postiz-app" ]; then
+            echo "Refusing to publish container images from ${GITHUB_REPOSITORY}."
+            echo "This fork publishes only ghcr.io/eonsofstupid/postiz-app via fuqn-image.yml."
+            exit 1
+          fi
           docker buildx build --platform linux/${{ matrix.arch }} \
             -f Dockerfile.dev \
             -t ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-${{ matrix.arch }} \
@@ -59,6 +69,7 @@ jobs:
             --output "type=registry,name=ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-${{ matrix.arch }}" .
 
   build-container-manifest:
+    if: github.repository == 'gitroomhq/postiz-app'
     needs: [build-containers, build-containers-common]
     runs-on: ubuntu-latest
     steps:
@@ -73,6 +84,10 @@ jobs:
         env:
           CONTAINERVER: ${{ needs.build-containers-common.outputs.containerver }}
         run: |
+          if [ "${GITHUB_REPOSITORY}" != "gitroomhq/postiz-app" ]; then
+            echo "Refusing to publish container manifests from ${GITHUB_REPOSITORY}."
+            exit 1
+          fi
           # Verify the architecture images
           echo "Verifying AMD64 image:"
           docker buildx imagetools inspect ghcr.io/gitroomhq/postiz-app:${{ env.CONTAINERVER }}-amd64

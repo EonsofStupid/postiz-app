@@ -28,6 +28,9 @@ export const GET = async (
     }>;
   }
 ) => {
+  if ((process.env.STORAGE_PROVIDER || 'local') !== 'local') {
+    return new NextResponse('Not found', { status: 404 });
+  }
   const { path } = await context.params;
   const base = resolve(process.env.UPLOAD_DIRECTORY!);
   const filePath = resolve(base, (path ?? []).join('/'));

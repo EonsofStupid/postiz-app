@@ -15,8 +15,11 @@ dist
 .devcontainer
 **/.git
 **/*.md
-**/LICENSE
 **/npm-debug.log
+.env
+.env.*
+**/.env
+**/.env.*
 **/*.vscode
 .git
 .github
